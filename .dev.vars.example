@@ -1,0 +1,11 @@
+# Copy to .dev.vars (gitignored) for local dev. In production these are encrypted
+# secrets: npx wrangler pages secret put <NAME> --project-name <your-project>
+
+# The Google Chat space's incoming webhook URL. Treat the whole URL as a secret.
+GCHAT_SPACE_WEBHOOK_URL=
+
+# Random string on the end of the Chat app's endpoint URL. Generate: openssl rand -hex 24
+GCHAT_APP_TOKEN=
+
+# Optional fallback when Workers AI errors or runs out of free neurons.
+# GEMINI_API_KEY=

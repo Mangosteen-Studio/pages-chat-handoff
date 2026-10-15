@@ -1,0 +1,17 @@
+{
+  "name": "pages-chat-handoff",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Free AI site chat on Cloudflare Pages that hands off to your team in Google Chat. Visitors can point at what they're asking about.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wrangler pages dev public --d1 CHAT_DB --compatibility-date=2026-10-01",
+    "dev:ai": "wrangler pages dev public --d1 CHAT_DB --ai AI --compatibility-date=2026-10-01",
+    "tunnel": "cloudflared tunnel --url http://localhost:8788",
+    "check": "wrangler pages functions build --outdir .wrangler/check",
+    "deploy": "wrangler pages deploy public"
+  },
+  "devDependencies": {
+    "wrangler": "^4.71.0"
+  }
+}

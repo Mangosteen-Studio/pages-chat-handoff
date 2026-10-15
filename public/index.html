@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>pages-chat-handoff demo</title>
+  <meta name="description" content="Free AI site chat on Cloudflare Pages that hands off to your team in Google Chat." />
+  <style>
+    :root {
+      --ink: #18181b; --soft: #52525b; --line: #e4e4e7; --paper: #fafafa; --card: #ffffff;
+      /* Optional chat theme. Any --pc-* variable works; see the README for the full list. */
+      --pc-accent: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 64px 16px 160px; }
+    h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1.1; margin: 0 0 16px; letter-spacing: -0.02em; }
+    h2 { font-size: 22px; margin: 56px 0 12px; }
+    p, li { color: var(--soft); }
+    .lede { font-size: 19px; margin: 0 0 8px; }
+    .steps { display: grid; gap: 12px; padding: 0; list-style: none; counter-reset: step; }
+    .steps li { counter-increment: step; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 16px 16px 56px; position: relative; }
+    .steps li::before { content: counter(step); position: absolute; left: 16px; top: 16px; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 13px; display: grid; place-items: center; }
+    .steps strong { color: var(--ink); }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 15px; }
+    th { color: var(--ink); font-weight: 600; }
+    td { color: var(--soft); }
+    tr:last-child td { border-bottom: 0; }
+    pre { background: #18181b; color: #f4f4f5; border-radius: 12px; padding: 16px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .hint { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AI site chat that hands off to Google Chat</h1>
+    <p class="lede">Visitors get instant answers from a text file you control. When the AI can't help, the chat lands in your team's Google Chat space and your replies go straight back to the visitor.</p>
+    <p class="hint">Try the bar at the bottom. Click <strong>Point</strong>, then click anything on this page and ask about it.</p>
+
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li><strong>The AI answers first.</strong> Cloudflare Workers AI replies using only what's in <code>knowledge.txt</code>, with Gemini as an optional fallback.</li>
+      <li><strong>It hands off when it should.</strong> Asking for a person, or anything the knowledge doesn't cover, pings your Google Chat space in a thread for that visitor.</li>
+      <li><strong>Your team replies from Google Chat.</strong> @mention the app in the thread and the reply shows up in the visitor's chat within seconds.</li>
+    </ol>
+
+    <h2>What it costs</h2>
+    <table>
+      <tr><th>Piece</th><th>Free tier</th></tr>
+      <tr><td>Cloudflare Pages + Functions</td><td>Covered by the Workers free plan</td></tr>
+      <tr><td>D1 (chat transcripts)</td><td>Covered; chats are deleted after 7 days</td></tr>
+      <tr><td>Workers AI</td><td>10,000 neurons/day, about 125 replies on Llama 3.3 70B</td></tr>
+      <tr><td>Google Chat</td><td>Needs a Google Workspace account</td></tr>
+    </table>
+
+    <h2>Limits worth knowing</h2>
+    <ul>
+      <li>Team replies must @mention the Chat app, in the visitor's thread. Google Chat only sends @mentioned messages to apps.</li>
+      <li>If your Pages project ships a <code>_worker.js</code> (next-on-pages does), Cloudflare ignores the <code>functions</code> folder.</li>
+      <li>Replies arrive by polling, so expect a few seconds of delay.</li>
+    </ul>
+
+    <h2>Drop it into your site</h2>
+    <pre><code>&lt;script src="/chat-widget.js" defer
+  data-name="Acme"
+  data-email="hello@acme.com"&gt;&lt;/script&gt;</code></pre>
+    <p class="hint">Copy <code>functions/</code> to your Pages project root and <code>chat-widget.js</code> to your static folder. The README walks through the rest in about 10 minutes.</p>
+  </main>
+
+  <script src="/chat-widget.js" defer data-name="Handoff" data-email="hello@example.com"></script>
+</body>
+</html>
