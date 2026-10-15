@@ -32,6 +32,8 @@ export const CONFIG = {
 
   maxMessageLength: 1000,
   maxVisitorMessages: 30, // per chat
+  // Session IDs come from the browser, so the real abuse limit is per IP (stored only as a hash).
+  maxMessagesPerIpPerHour: 60,
   maxPointedContextLength: 200, // characters of the element a visitor pointed at
   retentionDays: 7,
 };

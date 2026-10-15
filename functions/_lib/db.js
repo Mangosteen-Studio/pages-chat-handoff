@@ -11,6 +11,7 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS chat_messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, sender TEXT NOT NULL, agent_name TEXT, is_ai INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL, element_context TEXT, created_at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages (session_id, created_at)",
   "CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages (created_at)",
+  "CREATE TABLE IF NOT EXISTS chat_rate_limits (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL)",
 ];
 
 // Tables are created on first use per isolate, so setup is just "create a D1
@@ -48,7 +49,28 @@ export async function createSession(db, sessionId) {
     db.prepare("INSERT OR IGNORE INTO chat_sessions (id, ai_mode, created_at) VALUES (?, 1, ?)").bind(sessionId, now),
     db.prepare("DELETE FROM chat_messages WHERE created_at < ?").bind(now - RETENTION_MS),
     db.prepare("DELETE FROM chat_sessions WHERE created_at < ?").bind(now - RETENTION_MS),
+    db.prepare("DELETE FROM chat_rate_limits WHERE window_start < ?").bind(now - 24 * 60 * 60 * 1000),
   ]);
+}
+
+// Fixed-window counter: returns true once `key` has gone over `limit` in the current window.
+export async function overRateLimit(db, key, limit, windowMs) {
+  const windowStart = Math.floor(Date.now() / windowMs) * windowMs;
+  const row = await db
+    .prepare(
+      "INSERT INTO chat_rate_limits (key, window_start, count) VALUES (?, ?, 1) " +
+        "ON CONFLICT(key) DO UPDATE SET count = CASE WHEN window_start = excluded.window_start THEN count + 1 ELSE 1 END, " +
+        "window_start = excluded.window_start RETURNING count"
+    )
+    .bind(key, windowStart)
+    .first();
+  return row.count > limit;
+}
+
+// Rate-limit keys use a hash so raw visitor IPs are never stored.
+export async function hashIp(ip) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`pages-chat:${ip}`));
+  return Array.from(new Uint8Array(digest).slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export function setAiMode(db, sessionId, aiMode) {

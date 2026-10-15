@@ -3,6 +3,8 @@ import { CONFIG } from "../_lib/config.js";
 import KNOWLEDGE from "../_lib/knowledge.txt";
 import {
   createSession,
+  hashIp,
+  overRateLimit,
   getDb,
   getSession,
   insertMessage,
@@ -15,11 +17,16 @@ import {
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OR_EMAIL = CONFIG.contactEmail ? `, or email ${CONFIG.contactEmail}` : "";
 const DEFAULT_HANDOFF_TEXT = `I'm pinging the team now. Someone will reply right here. Drop your email in case you step away${OR_EMAIL}.`;
+const FAILED_HANDOFF_TEXT = `I couldn't reach the team just now.${
+  CONFIG.contactEmail ? ` Email ${CONFIG.contactEmail} and we'll pick it up.` : " Try again in a few minutes."
+}`;
 
 // The model doesn't always emit [HANDOFF], so code decides too: an explicit ask for a person
 // skips the AI entirely, and a reply that says it's pinging the team counts as a handoff.
+// Only explicit asks count, so "is this human-reviewed?" stays with the AI.
+// (Drop "agent" from the list if your product has something called an agent.)
 const HUMAN_REQUEST_RE =
-  /\b(human|real person|actual person|live person|representative|(live|human|support|real) agent)\b|\b(talk|speak|chat)\s+(to|with)\s+(a\s+person|someone|somebody|the\s+founder|the\s+team|sales|support|your\s+team)\b/i;
+  /\b(talk|speak|chat|connect)\s+(me\s+)?(to|with)\s+(a\s+|an\s+|the\s+|your\s+)?(human|person|real person|someone|somebody|founder|team|sales|support|rep|representative|agent)\b|\b(real|actual|live)\s+(person|human|agent)\b|\b(a|an)\s+representative\b|^\s*(a\s+)?human\s*[?.!]*\s*$/i;
 const HANDOFF_REPLY_RE = /\[HANDOFF\]|\bpinging the team\b/i;
 
 // First reply in a chat always greets, and asks who we're talking to unless they already said.
@@ -113,8 +120,10 @@ const chatSafe = (str) => str.replace(/</g, "‹").replace(/>/g, "›");
 // ---------------------------------------------------------------------------
 // 2. Mirror each exchange into a Google Chat space thread (threadKey = sessionId)
 //    via the space's incoming webhook. No service account or OAuth needed.
+// Returns true only when Google Chat accepted the message.
 // ---------------------------------------------------------------------------
-async function mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl, visitorMsg, aiReplyMsg, handoffTriggered, aiMode }) {
+async function mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl, visitorMsg, aiReplyText, handoffTriggered, aiMode }) {
+  if (!env.GCHAT_SPACE_WEBHOOK_URL) return false;
   try {
     const gchatUrl = new URL(env.GCHAT_SPACE_WEBHOOK_URL);
     gchatUrl.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
@@ -123,7 +132,7 @@ async function mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl,
     if (isFirstMessage) gchatLines.push(`🟢 *New ${CONFIG.appName} chat* (${chatSafe(pageUrl || "Website")})`);
     if (visitorMsg.elementContext) gchatLines.push(`📍 _Pointing at:_ ${chatSafe(visitorMsg.elementContext)}`);
     gchatLines.push(`*👤 Visitor:* ${chatSafe(visitorMsg.text)}`);
-    if (aiReplyMsg) gchatLines.push(`*🤖 AI Assistant:* ${chatSafe(aiReplyMsg.text)}`);
+    if (aiReplyText) gchatLines.push(`*🤖 AI Assistant:* ${chatSafe(aiReplyText)}`);
 
     if (handoffTriggered) {
       gchatLines.push(`\n🚨 *HUMAN HANDOFF REQUESTED* <users/all> Hit *Reply* on this message and start with *@${CONFIG.chatAppName}* to answer the visitor.`);
@@ -143,8 +152,10 @@ async function mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl,
 
     // Map Google Chat's thread name -> sessionId so agent replies route back to this visitor
     if (gchatData.thread?.name) await setGoogleThread(db, sessionId, gchatData.thread.name);
+    return true;
   } catch (err) {
     console.error("Failed to mirror message to Google Chat:", err);
+    return false;
   }
 }
 
@@ -191,6 +202,11 @@ export async function onRequestPost(context) {
 
   try {
     const db = await getDb(env);
+    const ipKey = await hashIp(request.headers.get("CF-Connecting-IP") || "unknown");
+    if (await overRateLimit(db, `chat:${ipKey}`, CONFIG.maxMessagesPerIpPerHour, 60 * 60 * 1000)) {
+      return json({ error: `That's a lot of messages. Give it a few minutes${OR_EMAIL}.` }, 429);
+    }
+
     const session = await getSession(db, sessionId);
     const isFirstMessage = !session;
     if (isFirstMessage) await createSession(db, sessionId);
@@ -204,8 +220,8 @@ export async function onRequestPost(context) {
     const visitorMsg = await insertMessage(db, sessionId, { sender: "visitor", text, elementContext });
     messages.push(visitorMsg);
 
-    let aiMode = session ? Boolean(session.ai_mode) : true;
-    let aiReplyMsg = null;
+    const aiMode = session ? Boolean(session.ai_mode) : true;
+    let replyText = null;
     let handoffTriggered = false;
 
     // If thread is in AI mode, ask Workers AI (or fallback)
@@ -215,36 +231,39 @@ export async function onRequestPost(context) {
         : await askSupportAI(messages, env);
       handoffTriggered = HANDOFF_REPLY_RE.test(rawAiText);
 
-      let replyText = rawAiText.replace(/\[HANDOFF\]/gi, "").trim() || DEFAULT_HANDOFF_TEXT;
+      replyText = rawAiText.replace(/\[HANDOFF\]/gi, "").trim() || DEFAULT_HANDOFF_TEXT;
       if (isFirstMessage) {
         if (CONFIG.greeting && !/^(hey|hi|hello)\b/i.test(replyText)) replyText = `${CONFIG.greeting} ${replyText}`;
         if (CONFIG.roleQuestion && !handoffTriggered && !ROLE_MENTIONED_RE.test(text)) {
           replyText += `\n\n${CONFIG.roleQuestion}`;
         }
       }
+    }
 
-      aiReplyMsg = await insertMessage(db, sessionId, {
-        sender: "agent",
-        agentName: "AI Assistant",
-        isAi: true,
-        text: replyText,
-      });
-      messages.push(aiReplyMsg);
+    const mirror = () =>
+      mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl, visitorMsg, aiReplyText: replyText, handoffTriggered, aiMode });
 
-      if (handoffTriggered) {
-        aiMode = false; // Turn off AI so a human takes over
-        await setAiMode(db, sessionId, false);
+    let nowHumanMode = !aiMode;
+    if (handoffTriggered || !aiMode) {
+      // The visitor is about to hear "the team has it", so only say that once Google Chat took the message.
+      if (await mirror()) {
+        nowHumanMode = true;
+      } else {
+        replyText = `${isFirstMessage && CONFIG.greeting ? `${CONFIG.greeting} ` : ""}${FAILED_HANDOFF_TEXT}`;
+        nowHumanMode = false; // nobody was notified, so keep the AI on rather than leave them in silence
       }
+    } else {
+      // Plain AI answer: don't make the visitor wait on Google.
+      context.waitUntil(mirror());
     }
 
-    if (env.GCHAT_SPACE_WEBHOOK_URL) {
-      // Don't make the visitor wait on Google; finish mirroring after responding.
-      context.waitUntil(
-        mirrorToGoogleChat(env, db, { sessionId, isFirstMessage, pageUrl, visitorMsg, aiReplyMsg, handoffTriggered, aiMode })
-      );
+    if (replyText) {
+      messages.push(await insertMessage(db, sessionId, { sender: "agent", agentName: "AI Assistant", isAi: true, text: replyText }));
     }
+    // aiMode means "AI on"; flip it only when the human/AI state actually changed.
+    if (nowHumanMode === aiMode) await setAiMode(db, sessionId, !nowHumanMode);
 
-    return json({ ok: true, aiMode, messages });
+    return json({ ok: true, aiMode: !nowHumanMode, messages });
   } catch (err) {
     console.error("POST /api/chat failed:", err);
     return json({ error: `Couldn't send that. Try again${OR_EMAIL}.` }, 500);
