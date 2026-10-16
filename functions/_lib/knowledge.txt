@@ -19,7 +19,7 @@ SETUP
 LIMITS
 - Teammates must hit Reply on the visitor's thread in Google Chat and start the message by @mentioning the Chat app. Google Chat only sends @mentioned messages to apps.
 - If a Pages project has a _worker.js file (for example from next-on-pages), Cloudflare ignores the functions folder, so this template won't run there without porting it into that worker.
-- Replies arrive by polling every few seconds, not websockets. Chats are deleted after 7 days.
+- Replies arrive by polling every few seconds, not websockets. Chats expire after 7 days.
 - Each visitor IP gets 60 messages an hour by default. For heavier abuse, a Cloudflare WAF rate-limiting rule on /api/chat is recommended.
 
 HAND OFF WHEN

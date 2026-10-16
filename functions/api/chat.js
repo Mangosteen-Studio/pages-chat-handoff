@@ -26,7 +26,7 @@ const FAILED_HANDOFF_TEXT = `I couldn't reach the team just now.${
 // Only explicit asks count, so "is this human-reviewed?" stays with the AI.
 // (Drop "agent" from the list if your product has something called an agent.)
 const HUMAN_REQUEST_RE =
-  /\b(talk|speak|chat|connect)\s+(me\s+)?(to|with)\s+(a\s+|an\s+|the\s+|your\s+)?(human|person|real person|someone|somebody|founder|team|sales|support|rep|representative|agent)\b|\b(real|actual|live)\s+(person|human|agent)\b|\b(a|an)\s+representative\b|^\s*(a\s+)?human\s*[?.!]*\s*$/i;
+  /\b(talk|speak|chat|connect)\s+(me\s+)?(to|with)\s+(a\s+|an\s+|the\s+|your\s+)?(human|person|real person|someone|somebody|founder|team|sales|support|rep|representative|agent)\b|\b(need|want|get\s+me|give\s+me)\s+(a\s+|an\s+)?(human|person|real person|representative)\b|\b(real|actual|live)\s+(person|human|agent)\b|\b(a|an)\s+representative\b|^\s*(a\s+)?human\s*[?.!]*\s*$/i;
 const HANDOFF_REPLY_RE = /\[HANDOFF\]|\bpinging the team\b/i;
 
 // First reply in a chat always greets, and asks who we're talking to unless they already said.
@@ -202,7 +202,7 @@ export async function onRequestPost(context) {
 
   try {
     const db = await getDb(env);
-    const ipKey = await hashIp(request.headers.get("CF-Connecting-IP") || "unknown");
+    const ipKey = await hashIp(db, request.headers.get("CF-Connecting-IP") || "unknown");
     if (await overRateLimit(db, `chat:${ipKey}`, CONFIG.maxMessagesPerIpPerHour, 60 * 60 * 1000)) {
       return json({ error: `That's a lot of messages. Give it a few minutes${OR_EMAIL}.` }, 429);
     }

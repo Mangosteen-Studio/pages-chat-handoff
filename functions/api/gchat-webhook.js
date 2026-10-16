@@ -4,15 +4,45 @@
 //   https://<your-site>/api/gchat-webhook?token=<GCHAT_APP_TOKEN>
 import { CONFIG } from "../_lib/config.js";
 import { getDb, getSessionByThread, insertMessage, json, setAiMode } from "../_lib/db.js";
+import { safeEqual, verifyGoogleChatToken } from "../_lib/google-auth.js";
+
+// Without this check anyone could POST fake "agent" messages into visitor chats.
+// GCHAT_APP_TOKEN checks the shared token in the URL; GCHAT_AUDIENCE checks the token Google
+// signs every request with. Set at least one; when both are set, both must pass.
+// Returns null when the request is allowed, otherwise a reason for the logs.
+async function rejectReason(request, env, payload) {
+  if (!env.GCHAT_APP_TOKEN && !env.GCHAT_AUDIENCE) return "neither GCHAT_APP_TOKEN nor GCHAT_AUDIENCE is set";
+
+  if (env.GCHAT_APP_TOKEN) {
+    const token = new URL(request.url).searchParams.get("token") || "";
+    if (!(await safeEqual(token, env.GCHAT_APP_TOKEN))) return "bad ?token";
+  }
+
+  if (env.GCHAT_AUDIENCE) {
+    const bearer =
+      /^Bearer\s+(\S+)$/i.exec(request.headers.get("Authorization") || "")?.[1] ||
+      payload?.authorizationEventObject?.systemIdToken;
+    try {
+      return await verifyGoogleChatToken(bearer, {
+        audience: env.GCHAT_AUDIENCE,
+        serviceAccount: env.GCHAT_SERVICE_ACCOUNT || undefined,
+      });
+    } catch (err) {
+      return `couldn't verify Google's token: ${err.message}`;
+    }
+  }
+  return null;
+}
 
 export async function onRequestPost({ request, env }) {
-  // Without this check anyone could POST fake "agent" messages into visitor chats.
-  const token = new URL(request.url).searchParams.get("token");
-  if (!env.GCHAT_APP_TOKEN || token !== env.GCHAT_APP_TOKEN) {
+  const payload = await request.json().catch(() => null);
+
+  const reason = await rejectReason(request, env, payload);
+  if (reason) {
+    console.warn("gchat-webhook: rejected request:", reason);
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const payload = await request.json().catch(() => null);
   // Classic Chat apps send payload.message; Workspace add-on Chat apps nest it under payload.chat
   const message = payload?.message || payload?.chat?.messagePayload?.message;
   const reply = (text) => {
