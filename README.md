@@ -1,6 +1,6 @@
 # pages-chat-handoff
 
-Free AI chat for any site on Cloudflare Pages. When the AI can't help, the chat hands off to your team in Google Chat. Your replies go straight back to the visitor's chat window. Visitors can also point at the part of the page they're asking about.
+AI chat for Cloudflare Pages sites, on Cloudflare's free tier. Handoffs go to your team in Google Chat (Google Workspace required). Your replies go straight back to the visitor's chat window. Visitors can also point at the part of the page they're asking about.
 
 - **The AI answers first.** Workers AI replies using only what you put in one text file. Gemini is an optional fallback.
 - **Handoff is deterministic.** "Can I talk to a person?", the person button, or anything the knowledge doesn't cover pings your Google Chat space, in a thread for that visitor. The visitor is only told the team has it once Google Chat actually accepts the message.
@@ -11,12 +11,12 @@ It's about 1,000 lines of plain JavaScript: no framework, no build step, no depe
 
 ## What it costs
 
-$0 on Cloudflare, as long as you stay inside the free tiers:
+$0 on Cloudflare, as long as you stay inside the free tiers. The Google Chat side needs a Google Workspace plan:
 
 | Piece | Free tier |
 | --- | --- |
 | Pages + Pages Functions | Workers free plan (100k requests/day) |
-| D1 | Free tier; transcripts are deleted after 7 days |
+| D1 | Free tier; transcripts expire after 7 days |
 | Workers AI | 10,000 neurons/day. About 125 replies on the default Llama 3.3 70B, roughly 6x that on Llama 3.1 8B |
 | Google Chat | Needs a Google Workspace account you already pay for. Personal Gmail can't create Chat apps or webhooks |
 
@@ -98,7 +98,23 @@ npx wrangler pages secret put GEMINI_API_KEY --project-name <your-project>
 
 These commands set Production. Add Preview values under Settings → Variables and Secrets if you need them.
 
-### 7. Deploy and test
+### 7. Verify Google's signature (recommended)
+
+The `?token=` in the endpoint URL is a shared secret. Google also signs every request it sends with a token you can check, so a leaked URL alone isn't enough to post replies as your team. To turn that check on, set these as well:
+
+| Variable | Value |
+| --- | --- |
+| `GCHAT_AUDIENCE` | Whatever "Authentication Audience" is set to in the Chat API configuration. For **HTTP endpoint URL**, the full endpoint URL exactly as you entered it, `?token=…` included. For **Project Number** (classic Chat apps only), your Google Cloud project number. |
+| `GCHAT_SERVICE_ACCOUNT` | Only if the app is built as a **Google Workspace add-on**: the service account shown under Chat API → Configuration → Connection settings, `service-<project-number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`. Leave it unset for a classic Chat app. |
+
+```bash
+npx wrangler pages secret put GCHAT_AUDIENCE --project-name <your-project>
+npx wrangler pages secret put GCHAT_SERVICE_ACCOUNT --project-name <your-project>   # add-on apps only
+```
+
+With `GCHAT_AUDIENCE` set, a request needs both a matching `?token=` and a valid Google signature. If replies stop arriving after you turn it on, the Pages Functions log says which check failed.
+
+### 8. Deploy and test
 
 Deploy the way you normally do, or run `npm run deploy` for this demo. Then:
 
@@ -171,7 +187,7 @@ For a light theme, flip `--pc-bg` and `--pc-text`. Every border and tint is deri
 
 `functions/_lib/knowledge.txt` is the only thing the model knows about you. Write it as plain text in whatever structure you like: voice, facts, pricing, and a "hand off when" section for the cases where you want a person to answer (pricing talks, security reviews, billing).
 
-The rules the code depends on live in `functions/api/chat.js`, not in the knowledge file: short plain-text replies, no greeting, the `[HANDOFF]` marker, and ignoring prompt injection. That way, rewriting the knowledge can't break handoff. Asking for a person is also caught in code before the model runs, so that never depends on the model behaving. Only explicit asks count ("can I talk to someone", "live agent", the person button), so a question like "is this human-reviewed?" stays with the AI.
+The rules the code depends on live in `functions/api/chat.js`, not in the knowledge file: short plain-text replies, no greeting, the `[HANDOFF]` marker, and ignoring prompt injection. That way, rewriting the knowledge can't break handoff. Asking for a person is also caught in code before the model runs, so that never depends on the model behaving. Only explicit asks count ("can I talk to someone", "I need a human", "live agent", the person button), so a question like "is this human-reviewed?" stays with the AI.
 
 Edit the file and redeploy. The model repeats whatever is in it, so keep it current when pricing or features change.
 
@@ -199,10 +215,10 @@ widget ──GET /api/chat (polls)──▶ new messages
 - **Team replies must @mention the app, as a Reply in the visitor's thread.** Google Chat only sends @mentioned messages to apps in a space. Plain replies, and messages in the space's main box, never reach the site.
 - **It doesn't run on projects with a `_worker.js`.** If your build output has a `_worker.js` (next-on-pages does, and so do some other framework adapters), Cloudflare ignores the `functions/` folder. You'd need to route `/api/chat` and `/api/gchat-webhook` inside that worker yourself. Static exports, including Next.js `output: "export"`, work fine.
 - **A custom `_routes.json` has to include `/api/*`,** or the functions never run.
-- **The endpoint is protected by a shared token in the URL.** Anyone with the full Chat app endpoint URL can post replies as your team, so keep it private. To rotate it, change `GCHAT_APP_TOKEN` and the endpoint URL together. Google also signs each request with a bearer token; verifying that would be stronger, and it isn't implemented.
-- **Rate limiting is basic.** Session IDs come from the browser, so the real limit is per IP: 60 messages an hour by default (`maxMessagesPerIpPerHour`). Counts live in D1 under a truncated hash of the IP, never the raw address, and are cleared after a day. That stops casual abuse; for anything heavier, add a Cloudflare WAF rate-limiting rule on `/api/chat`.
+- **Without `GCHAT_AUDIENCE`, the endpoint is protected only by the token in its URL.** Anyone with the full Chat app endpoint URL could then post replies as your team. Turn on [signature verification](#7-verify-googles-signature-recommended) so a leaked URL isn't enough. To rotate the token, change `GCHAT_APP_TOKEN`, the endpoint URL and `GCHAT_AUDIENCE` together.
+- **Rate limiting is basic.** Session IDs come from the browser, so the real limit is per IP: 60 messages an hour by default (`maxMessagesPerIpPerHour`). Counts live in D1 under a keyed hash of the IP (HMAC with a random secret the database generates on first use), never the raw address, and are cleared after a day. That stops casual abuse; for anything heavier, add a Cloudflare WAF rate-limiting rule on `/api/chat`.
 - **Polling, not websockets.** Expect a few seconds between your reply and the visitor seeing it.
-- **Transcripts are readable by anyone holding the session ID.** It's a random UUID stored in the visitor's browser, and chats are deleted after `retentionDays`. You're also storing visitor messages in D1 and in Google Chat, so mention that in your privacy policy.
+- **Transcripts are readable by anyone holding the session ID.** It's a random UUID stored in the visitor's browser. Chats stop being readable after `retentionDays` and are deleted on the next request after that (Pages Functions have no cron). You're also storing visitor messages in D1 and in Google Chat, so mention that in your privacy policy.
 - **It's an LLM.** Low temperature and a strict brief keep it on script, but it can still be wrong. Keep `knowledge.txt` tight.
 
 ## License

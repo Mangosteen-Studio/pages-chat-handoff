@@ -9,3 +9,9 @@ GCHAT_APP_TOKEN=
 
 # Optional fallback when Workers AI errors or runs out of free neurons.
 # GEMINI_API_KEY=
+
+# Optional, recommended: verify the token Google signs every Chat request with.
+# Set to the Chat API "Authentication Audience": the exact endpoint URL, or the project number.
+# GCHAT_AUDIENCE=
+# Add-on Chat apps only: service-<project-number>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com
+# GCHAT_SERVICE_ACCOUNT=
